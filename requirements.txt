@@ -1,0 +1,8 @@
+requests~=2.27.1
+pyexcel~=0.7.0
+pyexcel-xls==0.7.0
+pyTelegramBotAPI==4.4.1
+telethon==1.24.0
+pyrogram==2.0.19
+telebot~=0.0.4
+aiogram~=2.20
