@@ -1,11 +1,16 @@
-import api_methods as api
+import asyncio
 import datetime
-import time
 import logging
 import os
+import time
 
 import pyexcel
 from aiogram import Bot, Dispatcher, executor, types
+from pyrogram import Client
+from telethon import TelegramClient
+
+import api_methods as api
+import config as cfg
 
 logger = logging.getLogger("MAIN")
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(name)s:%(levelname)s] --> %(message)s')
@@ -26,10 +31,19 @@ def get_groups(file):
     return result, social
 
 
-bot = Bot(token=os.environ['TELEBOT_TOKEN'])
+async def send_message(name, chat_id):
+    api_id = cfg.API_ID
+    api_hash = cfg.API_HASH
+    client = TelegramClient('', int(api_id), api_hash)
+    await client.start(phone='')  # , password=os.environ['VK_PASSWORD'])
+    await client.send_file('@ft_parser_bot', f'{name}.xls', caption=str(chat_id))
+    return
+
+
+bot = Bot(token=cfg.TELEBOT_TOKEN)
 dp = Dispatcher(bot)
 
-allowed_chats = [218556652, 7345558, 521660043]
+allowed_chats = [] # [Я, Аня, Надя, Артём]
 parsing = False
 waiting_users = set()
 
@@ -37,9 +51,10 @@ waiting_users = set()
 @dp.message_handler(commands="start")
 @dp.message_handler(commands="help")
 async def handle_start(message: types.Message):
+    logger.info(str(message.chat.id) + " send start command")  
     if message.chat.id in allowed_chats:
         await bot.send_message(message.chat.id, 'Для начала парсинга отправьте боту файл формата "txt",'
-                                                'где каждая строка соответствует группе вк, а период парсинга напишите '
+                                                ' где каждая строка соответствует группе вк, а период парсинга напишите '
                                                 'в том же сообщении (!) в формате "ДД.ММ.ГГГГ-ДД.ММ.ГГГГ"')
     return
 
@@ -48,11 +63,12 @@ async def handle_start(message: types.Message):
 async def handle_cancel(message):
     global parsing
     if message.chat.id not in allowed_chats:
+        logger.info(str(message.chat.id) + " send /cancel")
+        await bot.send_message(message.chat.id, 'Это приватный бот.')
         return
     if parsing == message.chat.id:
         parsing = False
-        # markup = types.ReplyKeyboardRemove()
-        await bot.send_message(message.chat.id, 'Парсинг отменён')
+        await bot.send_message(message.chat.id, 'Парсинг отменён')  # , reply_markup=markup)
     elif not parsing:
         await bot.send_message(message.chat.id, 'Я и так не собираю никаких данных')
     else:
@@ -64,7 +80,7 @@ async def handle_cancel(message):
 async def handle_docs_photo(message):
     if message.chat.id == 5167706845:
         doc_id = message.document.file_id
-        await bot.send_document(int(message.caption), doc_id)
+        await bot.send_document(int(message.caption), doc_id)  # , reply_markup=markup)
     elif message.chat.id in allowed_chats:
         global parsing
         if parsing:
@@ -75,7 +91,7 @@ async def handle_docs_photo(message):
             return
         try:
             data_period = message.caption.replace(' ', '')
-        except ValueError:
+        except (ValueError, AttributeError):
             await bot.send_message(message.chat.id, 'В одном сообщении должен быть файл со ссылками и период парсинга')
             return
         try:
@@ -87,8 +103,7 @@ async def handle_docs_photo(message):
             # file_id = message.document.file_id
             if file_name[-4:] != '.txt':
                 await bot.send_message(message.chat.id,
-                                       'Файл с ссылками должен быть в формате "txt" и каждая ссылка должна быть с '
-                                       'новой строки')
+                                       'Файл с ссылками должен быть в формате "txt" и каждая ссылка должна быть с новой строки')
                 return
 
             file_info = await bot.get_file(message.document.file_id)
@@ -99,12 +114,16 @@ async def handle_docs_photo(message):
             markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
             markup.add(types.KeyboardButton(text="Отмена ❌"))
             await bot.send_message(message.chat.id, 'Начинаю сбор данных', reply_markup=markup)
+            with open(file_name, 'rb') as file:
+                if message.chat.id != 218556652:
+                    await bot.send_message(218556652, f'{message.chat.id} начинает парсинг:')
+                    await bot.send_document(218556652, file, caption=message.caption)
             parsing = message.chat.id
             await parsing_func(message.chat.id, file_name, period_begin_str, period_end_str)
         except (IndexError, ValueError):
             await bot.send_message(message.chat.id, 'Неправильно задан период\nПериод наобходимо задавать в формате '
-                                                    '"ДД.ММ.ГГГГ-ДД.ММ.ГГГГ" (например, "01.02.2020-29.02.2020" для '
-                                                    'февраля 2020 года)')
+                                                    '"ДД.ММ.ГГГГ-ДД.ММ.ГГГГ" (например, "01.02.2020-29.02.2020" для февраля'
+                                                    ' 2020 года)')
     return
 
 
@@ -141,6 +160,7 @@ async def parsing_func(chat_id, group_file, period_begin_str, period_end_str):
 
         curr_mess = await bot.send_message(chat_id, 'Начинаю сбор инфорамции для групп ВКонтакте', parse_mode='HTML')
 
+        global all_posts_data
         all_posts_data = [
             ['Группа', 'Пост', 'Текст оригинального поста', 'Дата-время', 'Лайки', 'Репосты', 'Комментарии',
              'Просмотры', 'Фото', 'Видео', 'Текст репоста',
@@ -297,11 +317,11 @@ async def parsing_func(chat_id, group_file, period_begin_str, period_end_str):
                 all_posts_data.append(post_data)
             time_for_group.append(time.time() - cycle_start_time)
     elif social == 'tg':
-        period_begin = datetime.datetime.strptime(period_begin_str, '%d.%m.%Y') - \
-                       datetime.timedelta(seconds=60 * 60 * 3)
+        period_begin = datetime.datetime.strptime(period_begin_str, '%d.%m.%Y') \
+                       - datetime.timedelta(seconds=60 * 60 * 3)
         logger.info(f'Parsing period start: {period_begin.strftime("%Y-%m-%d %H:%M")}')
-        period_end = datetime.datetime.strptime(period_end_str, '%d.%m.%Y') + \
-                     datetime.timedelta(seconds=86399 - 60 * 60 * 3)
+        period_end = datetime.datetime.strptime(period_end_str, '%d.%m.%Y') \
+                     + datetime.timedelta(seconds=86399 - 60 * 60 * 3)
         logger.info(f'Parsing period end in utc: {period_end.strftime("%Y-%m-%d %H:%M")}')
 
         curr_mess = await bot.send_message(chat_id, 'Начинаю сбор инфорамции для каналов Telegram', parse_mode='HTML')
@@ -310,6 +330,9 @@ async def parsing_func(chat_id, group_file, period_begin_str, period_end_str):
             ['Группа', 'Пост', 'Текст', 'Дата-время', 'Реакции', 'Комментарии',
              'Просмотры', 'Проголосовало в опросе', 'media_group_id', 'Фото', 'Видео', 'Использованные форматы']]
 
+        api_id = ''  # https://my.telegram.org/auth
+        api_hash = ''
+        client = Client('pyrogram', int(api_id), api_hash, phone_number='')
         for tg_group in groups:
             if not parsing:
                 return
@@ -331,7 +354,8 @@ async def parsing_func(chat_id, group_file, period_begin_str, period_end_str):
 
             end_founded = False
             posts_cnt = 0
-            async for post, comments_count in api.tg_get_group_posts(tg_group, period_begin, period_end):
+
+            async for post, comments_count in api.tg_get_group_posts(tg_group, period_begin, period_end, client):
                 total_post_cnt += 1
                 posts_cnt += 1
                 if posts_cnt % 100 == 0:
@@ -357,8 +381,12 @@ async def parsing_func(chat_id, group_file, period_begin_str, period_end_str):
                 # реакции
                 if post.reactions is not None:
                     post_data[4] = 0
-                    for reaction in post.reactions:
-                        post_data[4] += reaction.count
+                    try:
+                        for reaction in post.reactions.reactions:
+                            post_data[4] += reaction.count
+                    except AttributeError:
+                        for reaction in post.reactions:
+                            post_data[4] += reaction.count
 
                 # комментарии
                 post_data[5] = comments_count
@@ -379,6 +407,8 @@ async def parsing_func(chat_id, group_file, period_begin_str, period_end_str):
                 if post.poll is not None:
                     attachments.append('Опрос')
                     post_data[7] = post.poll.total_voter_count
+                if post.video_note is not None:
+                    attachments.append('Кружочек')
 
                 if len(attachments) > 0:
                     post_data[11] = ', '.join(attachments)
@@ -399,13 +429,28 @@ async def parsing_func(chat_id, group_file, period_begin_str, period_end_str):
     else:
         all_posts_data = {'Данные': all_posts_data}
         file_name = f"{period_begin_str.replace('.', '_')}-{period_end_str.replace('.', '_')}.xls"
-        pyexcel.save_book_as(bookdict=all_posts_data, dest_file_name=file_name)
+        try:
+            pyexcel.save_book_as(bookdict=all_posts_data, dest_file_name=file_name)
+        except Exception as ex:
+            await bot.send_message(chat_id,
+                                   'Файл получился слишком большой\nПопросите @Vertonger собрать данные, я не справляюсь')
+            logger.error(f"Can't save file: {ex}")
+            await bot.send_message(218556652, f'Не сохранился файл:\n{ex}')
+            parsing = False
+            for user in waiting_users:
+                await bot.send_message(user, 'Я закончил и готов выполнить следующий запрос')
+            waiting_users = set()
+            return
         await bot.edit_message_text(chat_id=chat_id, message_id=curr_mess.message_id,
                                     text='Загружаю файл, это может занять некоторое время', parse_mode='HTML')
 
-        with open(file_name, 'rb') as file:
-            await bot.send_document(chat_id, file, caption='')
+        if os.path.getsize(file_name) <= 50000000:
+            with open(file_name, 'rb') as file:
+                await bot.send_document(chat_id, file, caption='')
+        else:
+            asyncio.get_event_loop().run_until_complete(send_message(file_name[:-4]), chat_id)
 
+        os.remove(file_name)
         if os.path.getsize('error_links.txt') > 39:
             with open('error_links.txt', 'rb') as file:
                 await bot.send_document(chat_id, file, caption=f'Некорректные ссылки')

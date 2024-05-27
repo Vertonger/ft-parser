@@ -1,0 +1,6 @@
+API_HASH = ''
+API_ID = ''
+EXTRA_VK_TOKEN = ''
+PHONE = ''
+TELEBOT_TOKEN = ''
+VK_TOKEN = ''
